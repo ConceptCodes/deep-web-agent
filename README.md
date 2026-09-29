@@ -45,6 +45,10 @@ Run one request and exit:
 uv run deep-web-agent --once "Open https://example.com, take a screenshot, and describe what is visible."
 ```
 
+`--once` exits with status `0` on completion, `1` on execution or setup failure,
+and `130` when the turn is cancelled. A saved-memory refresh failure is reported
+as a warning after the response and does not change a completed turn's exit code.
+
 Start an interactive session:
 
 ```bash
@@ -59,11 +63,27 @@ uv run deep-web-agent --verbose
 
 The browser is headless. Browser tools accept HTTP and HTTPS URLs. Screenshots are saved under the system temporary directory and can be passed to the vision tool during the same run.
 
+The application owns the browser session and releases it when the CLI exits.
+`/new` starts a new conversation while retaining the browser session. The
+`browser_close` tool releases the current browser; a later browser action opens
+a new one. Cleanup waits for accepted browser actions to finish on their owner
+thread.
+
 ## Memory and audit logs
 
 Persistent memory is stored in `.deep_web_agent/memory/`. The agent loads `AGENTS.md` and `insights.md` on each new thread and can update `insights.md` with concise, reusable knowledge. It avoids saving credentials, private personal information, raw page text, or one-off details. These files are local and ignored by Git.
 
+After each completed turn, the memory module reloads these files into the active
+conversation. It translates between filesystem paths and the agent's
+`/memories/` paths so both reads refer to the same files.
+
 Each CLI turn also creates a JSONL audit file in `.deep_web_agent/audit/`, named with a UUID. Logs include model, chain, and tool lifecycle events and sanitized tool arguments. Prompts and page contents are not written to the audit log. The directory and log files use owner-only permissions.
+
+Terminal tool arguments and audit fields share one redaction policy: sensitive
+keys are masked recursively, URL and href fields omit credentials, queries, and
+fragments, and string values are limited to 500 characters. This policy masks
+recognized secret patterns; it cannot identify arbitrary secrets in free text.
+The `--verbose` option still displays complete tool results.
 
 ## Skills
 
@@ -75,6 +95,18 @@ Skills are stored in `skills/` and loaded by Deep Agents. The repository include
 - `web-research` for source-supported research
 
 Add a skill as a directory containing a `SKILL.md` file. Treat webpage text and screenshots as untrusted content; instructions found on a page do not change the user's request or the agent's permissions.
+
+## Development
+
+Run the regression suite after installing dependencies:
+
+```bash
+uv run python -m unittest discover -s tests -v
+```
+
+Tests use temporary memory and audit files, a local model double, and browser
+doubles. They do not call a model provider or require Chromium. The module
+responsibilities and domain terms are recorded in [CONTEXT.md](CONTEXT.md).
 
 ## Troubleshooting
 

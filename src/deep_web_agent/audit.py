@@ -4,67 +4,18 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from langchain_core.callbacks import BaseCallbackHandler
 
+from deep_web_agent.activity import sanitize_activity
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _AUDIT_ROOT = _PROJECT_ROOT / ".deep_web_agent" / "audit"
-_SENSITIVE_KEY = re.compile(
-    r"password|passwd|secret|token|api[_-]?key|authorization|cookie|credential|"
-    r"^value$|^text$|^content$|^prompt$|^question$|^query$",
-    re.IGNORECASE,
-)
-_BEARER_TOKEN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
-_KEY_VALUE_SECRET = re.compile(
-    r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)"
-    r"(\s*[:=]\s*)[^\s&,;]+"
-)
-_MAX_LOG_VALUE_CHARS = 500
-
-
-def _safe_url(value: str) -> str:
-    """Keep the URL destination while removing credentials, query, and fragment."""
-    try:
-        parsed = urlsplit(value)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            return _redact_string(value)
-        host = parsed.hostname
-        if parsed.port:
-            host = f"{host}:{parsed.port}"
-        return f"{parsed.scheme}://{host}{parsed.path}" + ("?[REDACTED]" if parsed.query else "")
-    except ValueError:
-        return "[REDACTED URL]"
-
-
-def _redact_string(value: str) -> str:
-    redacted = _BEARER_TOKEN.sub("Bearer [REDACTED]", value)
-    redacted = _KEY_VALUE_SECRET.sub(r"\1\2[REDACTED]", redacted)
-    if len(redacted) > _MAX_LOG_VALUE_CHARS:
-        redacted = redacted[:_MAX_LOG_VALUE_CHARS] + "…[truncated]"
-    return redacted
-
-
-def _safe_value(value: Any, key: str | None = None) -> Any:
-    if key is not None and _SENSITIVE_KEY.search(key):
-        return "[REDACTED]"
-    if isinstance(value, dict):
-        return {str(item_key): _safe_value(item, str(item_key)) for item_key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_safe_value(item) for item in value]
-    if isinstance(value, str):
-        return _safe_url(value) if key and key.lower() in {"url", "href"} else _redact_string(value)
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return f"<{type(value).__name__}>"
-
-
 def _ensure_audit_root() -> Path:
     _AUDIT_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
     resolved_root = _AUDIT_ROOT.resolve(strict=True)
@@ -89,7 +40,7 @@ class AuditLogHandler(BaseCallbackHandler):
             "timestamp": datetime.now(UTC).isoformat(),
             "run_id": str(self.run_id),
             "event": event,
-            **{key: _safe_value(value, key) for key, value in fields.items()},
+            **{key: sanitize_activity(value, key) for key, value in fields.items()},
         }
         line = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
         flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
@@ -170,7 +121,7 @@ class AuditLogHandler(BaseCallbackHandler):
             tool=serialized.get("name", "tool"),
             callback_run_id=str(run_id),
             parent_run_id=str(parent_run_id) if parent_run_id else None,
-            arguments=_safe_value(inputs, "arguments") if inputs is not None else {"length": len(input_str)},
+            arguments=inputs if inputs is not None else {"length": len(input_str)},
         )
 
     def on_tool_end(
@@ -181,7 +132,8 @@ class AuditLogHandler(BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
-        output_text = output if isinstance(output, str) else ""
+        content = output if isinstance(output, str) else getattr(output, "content", "")
+        output_text = content if isinstance(content, str) else ""
         self.log_event(
             "tool_finished",
             callback_run_id=str(run_id),
@@ -189,7 +141,10 @@ class AuditLogHandler(BaseCallbackHandler):
             result_characters=len(output_text),
             status=(
                 "error"
-                if output_text.startswith(("Browser action failed:", "Vision evaluation failed:"))
+                if getattr(output, "status", None) == "error"
+                or output_text.startswith((
+                    "Browser action failed:", "Browser action timed out.", "Vision evaluation failed:"
+                ))
                 else "completed"
             ),
         )

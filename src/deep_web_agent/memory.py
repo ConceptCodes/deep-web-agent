@@ -2,13 +2,12 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.backends.protocol import BackendProtocol
 
 from deep_web_agent.backend import PROJECT_ROOT
-from deep_web_agent.settings import settings
 
 _DEFAULT_MEMORY_GUIDANCE = """# Persistent agent memory instructions
 
@@ -32,8 +31,26 @@ _DEFAULT_INSIGHTS = (
 @dataclass(frozen=True)
 class MemorySetup:
     backend: BackendProtocol
-    files: list[str]
     store: Any = None
+    route: ClassVar[str] = "/memories/"
+    _names: ClassVar[tuple[str, ...]] = ("AGENTS.md", "insights.md")
+
+    @property
+    def files(self) -> list[str]:
+        return [self.route + name for name in self._names]
+
+    def load_contents(self) -> dict[str, str]:
+        """Read local files and return contents keyed by agent-visible paths."""
+        results = self.backend.download_files(["/" + name for name in self._names])
+        contents: dict[str, str] = {}
+        for path, result in zip(self.files, results, strict=True):
+            if result.error == "file_not_found":
+                continue
+            if result.error is not None:
+                raise OSError(f"Could not load memory source {path}: {result.error}")
+            if result.content is not None:
+                contents[path] = result.content.decode("utf-8")
+        return contents
 
 
 def _create_if_missing(path: Path, content: str) -> None:
@@ -44,9 +61,9 @@ def _create_if_missing(path: Path, content: str) -> None:
         pass
 
 
-def initialize_memory() -> MemorySetup:
+def initialize_memory(memory_dir: Path | None = None) -> MemorySetup:
     """Prepare persistent memory files and return their backend configuration."""
-    memory_root = (settings.memory_dir or Path(".deep_web_agent/memory")).expanduser()
+    memory_root = (memory_dir or Path(".deep_web_agent/memory")).expanduser()
     if not memory_root.is_absolute():
         memory_root = PROJECT_ROOT / memory_root
     memory_root = memory_root.resolve()
@@ -57,19 +74,4 @@ def initialize_memory() -> MemorySetup:
 
     return MemorySetup(
         backend=FilesystemBackend(root_dir=str(memory_root), virtual_mode=True),
-        files=["/memories/AGENTS.md", "/memories/insights.md"],
     )
-
-
-def load_memory_sources(memory_setup: MemorySetup) -> dict[str, str]:
-    """Read the latest persistent notes for refreshing an active thread."""
-    results = memory_setup.backend.download_files(memory_setup.files)
-    contents: dict[str, str] = {}
-    for path, result in zip(memory_setup.files, results, strict=True):
-        if result.error == "file_not_found":
-            continue
-        if result.error is not None:
-            raise OSError(f"Could not load memory source {path}: {result.error}")
-        if result.content is not None:
-            contents[path] = result.content.decode("utf-8")
-    return contents
