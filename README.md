@@ -1,6 +1,6 @@
 # Deep Web Agent
 
-Deep Web Agent is a terminal agent for browsing websites, checking pages, and reviewing screenshots. It uses Deep Agents and LangGraph, with Playwright for browser control and a vision model for screenshot analysis.
+Deep Web Agent is a terminal agent for browsing websites, checking pages, and reviewing screenshots. It uses [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) and [LangGraph](https://docs.langchain.com/oss/python/langgraph/graph-api), with [Playwright](https://playwright.dev/python/docs/api/class-playwright) for browser control and a vision model for screenshot analysis.
 
 ## Features
 
@@ -51,7 +51,7 @@ Start an interactive session:
 uv run deep-web-agent
 ```
 
-Use `/help` to see the interactive commands. Add `--verbose` to show short previews of browser tool results in the Activity panel:
+Use `/help` to see the interactive commands. Activity events are printed to terminal scrollback as they happen. Add `--verbose` to print complete browser tool results:
 
 ```bash
 uv run deep-web-agent --verbose
@@ -70,6 +70,7 @@ Each CLI turn also creates a JSONL audit file in `.deep_web_agent/audit/`, named
 Skills are stored in `skills/` and loaded by Deep Agents. The repository includes:
 
 - `browser-interaction` for browser task workflows
+- `browser-qa` for evidence-based exploratory website QA
 - `visual-web-review` for screenshot-based page review
 - `web-research` for source-supported research
 
